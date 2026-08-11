@@ -2,10 +2,10 @@
   "name": "rigDxf",
   "url": "https://github.com/rigkid/rigDxf.git",
   "ref": "main",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Rigkid",
-  "license": "MIT Rigkid Contributors",
-  "description": "DXF import to ParsedPathDoc / CPaths.",
+  "license": "GPL-2.0-or-later Rigkid Contributors",
+  "description": "DXF read and write as typed POD entities (paths, arcs, ellipses, splines) with a ParsedPathDoc lane for the plot pipeline. Vendors dxflib.",
   "dependencies": [
     {
       "name": "rigPlotComponent",

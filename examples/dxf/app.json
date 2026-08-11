@@ -1,13 +1,15 @@
 {
   "name": "dxf",
   "version": "0.1.0",
-  "license": "MIT",
-  "description": "rigDxf hero",
-  "window": { "width": 800, "height": 600, "title": "rigDxf - dxf" },
+  "license": "GPL-2.0-or-later",
+  "description": "rigDxf hero — pan/zoom DXF preview with layers",
+  "window": { "width": 1100, "height": 700, "title": "rigDxf - DXF preview" },
   "dependencies": [
     { "name": "rigComponent", "url": "https://github.com/rigkid/rigComponent.git", "ref": "main" },
     { "name": "rigSystems", "url": "https://github.com/rigkid/rigSystems.git", "ref": "main" },
     { "name": "rigPlotComponent", "url": "https://github.com/rigkid/rigPlotComponent.git", "ref": "main" },
-    { "name": "rigDxf", "url": "https://github.com/rigkid/rigDxf.git", "ref": "main" }
+    { "name": "rigDxf", "url": "https://github.com/rigkid/rigDxf.git", "ref": "main" },
+    { "name": "rigImGui", "url": "https://github.com/rigkid/rigImGui.git", "ref": "main" }
   ]
 }
+
