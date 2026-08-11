@@ -1,0 +1,13 @@
+{
+  "name": "dxf",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "rigDxf hero",
+  "window": { "width": 800, "height": 600, "title": "rigDxf - dxf" },
+  "dependencies": [
+    { "name": "rigComponent", "url": "https://github.com/rigkid/rigComponent.git", "ref": "main" },
+    { "name": "rigSystems", "url": "https://github.com/rigkid/rigSystems.git", "ref": "main" },
+    { "name": "rigPlotComponent", "url": "https://github.com/rigkid/rigPlotComponent.git", "ref": "main" },
+    { "name": "rigDxf", "url": "https://github.com/rigkid/rigDxf.git", "ref": "main" }
+  ]
+}

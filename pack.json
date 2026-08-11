@@ -1,0 +1,19 @@
+{
+  "name": "rigDxf",
+  "url": "https://github.com/rigkid/rigDxf.git",
+  "ref": "main",
+  "version": "0.1.0",
+  "author": "Rigkid",
+  "license": "MIT Rigkid Contributors",
+  "description": "DXF import to ParsedPathDoc / CPaths.",
+  "dependencies": [
+    {
+      "name": "rigPlotComponent",
+      "url": "https://github.com/rigkid/rigPlotComponent.git",
+      "ref": "main"
+    }
+  ],
+  "include_paths": [
+    "src"
+  ]
+}
