@@ -40,7 +40,9 @@
 #define strcasecmp(s,t) stricmp(s,t)
 #endif
 
-#if defined(_WIN32)
+// MinGW already ships strcasecmp; remapping it to _stricmp before the CRT
+// headers redeclares _stricmp without dllimport (-Wattributes).
+#if defined(_WIN32) && !defined(__MINGW32__)
 #define strcasecmp(s,t) _stricmp(s,t)
 #endif
 
