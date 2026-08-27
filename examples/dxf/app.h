@@ -1,11 +1,11 @@
 #pragma once
-#include "core/U_core.h"
-#include "core/util/View2D.h"
-#include "packs/rigDxf/src/DxfDocument.h"
-
 #include <map>
 #include <string>
 #include <vector>
+
+#include "core/U_core.h"
+#include "core/util/View2D.h"
+#include "packs/rigDxf/src/DxfDocument.h"
 
 class DxfHeroApp : public rigkit::IApp {
   public:

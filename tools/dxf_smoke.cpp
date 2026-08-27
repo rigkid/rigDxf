@@ -1,8 +1,7 @@
-#include "DxfLoader.h"
-
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include "DxfLoader.h"
 
 int main() {
 	const char* path = "dxf_smoke_tmp.dxf";

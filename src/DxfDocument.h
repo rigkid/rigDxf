@@ -1,7 +1,7 @@
 #pragma once
 
-#include <glm/glm.hpp>
 #include <cstdint>
+#include <glm/glm.hpp>
 #include <string>
 #include <vector>
 
@@ -25,7 +25,7 @@ struct Entity {
 	ecs::CPath path;
 	ecs::CArc arc;
 	ecs::CEllipse ellipse;
-	/// Degrees — major-axis angle for Ellipse / elliptical Arc (transform-equivalent).
+	/// Degrees - major-axis angle for Ellipse / elliptical Arc (transform-equivalent).
 	float rotationDegrees = 0.f;
 	ecs::CSpline spline;
 };
@@ -38,7 +38,7 @@ struct Layer {
 
 /**
  * @brief Loaded DXF as layers of typed entities.
- * @details Plot interchange uses flattenToParsed → ParsedPathDoc / CPaths.
+ * @details Plot interchange uses flattenToParsed to ParsedPathDoc / CPaths.
  */
 struct Document {
 	std::vector<Layer> layers;

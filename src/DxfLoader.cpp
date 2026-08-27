@@ -1,5 +1,14 @@
 #include "DxfLoader.h"
 
+#include "dl_attributes.h"
+#include "dl_codes.h"
+#include "dl_creationadapter.h"
+#include "dl_dxf.h"
+#include "dl_entities.h"
+#include "dl_writer_ascii.h"
+#include "PathFlatten.h"
+#include "PrimitiveVertices.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -10,16 +19,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "dl_attributes.h"
-#include "dl_codes.h"
-#include "dl_creationadapter.h"
-#include "dl_dxf.h"
-#include "dl_entities.h"
-#include "dl_writer_ascii.h"
-
-#include "PathFlatten.h"
-#include "PrimitiveVertices.h"
 
 namespace rigkit {
 namespace dxf {
@@ -35,7 +34,7 @@ constexpr double kTwoPiD = 6.283185307179586476925;
 
 /// Chord error used when a curve has to leave the typed lane (DXF write).
 constexpr float kExportTolerance = 0.05f;
-/// Nested INSERT ceiling — cyclic block references would otherwise never end.
+/// Nested INSERT ceiling - cyclic block references would otherwise never end.
 constexpr int kMaxInsertDepth = 16;
 
 // -------------------- Colour --------------------
@@ -143,7 +142,7 @@ float pointRunLength(const std::vector<glm::vec2>& pts) {
 std::vector<glm::vec2> splinePolyline(const ecs::CSpline& spline, float tolMm) {
 	const auto& hint = spline.controlPoints.empty() ? spline.fitPoints : spline.controlPoints;
 	// Sample density follows the requested chord tolerance through the length of
-	// the defining point run — a NURBS never strays far from it.
+	// the defining point run - a NURBS never strays far from it.
 	const float step = std::max(tolMm * 8.f, 0.1f);
 	const int segments =
 		std::clamp(static_cast<int>(std::ceil(pointRunLength(hint) / step)), 16, 4096);
@@ -369,7 +368,7 @@ void normalizeArcAngles(ecs::CArc& arc) {
  * @brief Circular arc described by a polyline bulge (tangent of a quarter sweep).
  * @details The bulge is signed: it carries the whole included angle, so the
  * centre offset along the chord normal and the sweep both come straight out of
- * it — no side-of-the-chord guesswork, and half-turns fall out at h = 0.
+ * it - no side-of-the-chord guesswork, and half-turns fall out at h = 0.
  * @return Empty when the bulge is flat or the chord has no length.
  */
 std::optional<ecs::CArc> arcFromBulge(const glm::vec2& p1, const glm::vec2& p2, double bulge) {
@@ -957,7 +956,7 @@ class RigDxfAdapter : public DL_CreationAdapter {
 			m_spline = ecs::CSpline{};
 			return;
 		}
-		// Empty weights mean "all ones" — do not carry a redundant array.
+		// Empty weights mean "all ones" - do not carry a redundant array.
 		const bool rational =
 			std::any_of(m_spline.weights.begin(), m_spline.weights.end(),
 						[](float w) { return std::abs(w - 1.f) > 1e-6f; });
@@ -1456,7 +1455,7 @@ CurvePromotionResult promoteCurves(Document& doc, const CurvePromotionSettings& 
 	CurvePromotionResult result;
 
 	// Bulge arcs already land as Arc entities during load, so the bulge settings
-	// have nothing left to recover — only faceted polylines are candidates here.
+	// have nothing left to recover - only faceted polylines are candidates here.
 	const bool wantFaceted = settings.promoteFacetedCircles || settings.promoteFacetedArcs;
 
 	for (auto& layer : doc.layers) {

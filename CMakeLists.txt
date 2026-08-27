@@ -12,7 +12,7 @@ if(NOT TARGET rigPlotComponent)
 	endif()
 endif()
 
-# Vendored dxflib (GPL-2.0-or-later) — never formatted, never widened.
+# Vendored dxflib (GPL-2.0-or-later) - never formatted, never widened.
 set(_dxflib_dir "${CMAKE_CURRENT_LIST_DIR}/third_party/dxflib")
 if(NOT TARGET dxflib)
 	add_library(dxflib STATIC
@@ -35,7 +35,7 @@ target_link_libraries(${PACK_NAME} PRIVATE dxflib)
 if(TARGET rigPlotComponent)
 	target_link_libraries(${PACK_NAME} PUBLIC rigPlotComponent)
 endif()
-# CArc / CEllipse / CSpline / verticesOf — normally reached through rigPlotComponent.
+# CArc / CEllipse / CSpline / verticesOf - normally reached through rigPlotComponent.
 if(TARGET rigComponent)
 	target_link_libraries(${PACK_NAME} PUBLIC rigComponent)
 endif()

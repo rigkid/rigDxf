@@ -12,5 +12,5 @@ cmake --build build --target dxf
 ./build/bin/dxf
 ```
 
-Scroll to zoom, LMB to pan. **File → Open…** loads a `.dxf`. Sidebar: layers, Mirror Y, Complement Arcs, **Promote Curves** (opt-in faceted recovery), Fit View.
+Scroll to zoom, LMB to pan. **File > Open...** loads a `.dxf`. Sidebar: layers, Mirror Y, Complement Arcs, **Promote Curves** (opt-in faceted recovery), Fit View.
 

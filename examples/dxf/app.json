@@ -2,7 +2,7 @@
   "name": "dxf",
   "version": "0.1.0",
   "license": "GPL-2.0-or-later",
-  "description": "rigDxf hero — pan/zoom DXF preview with layers",
+  "description": "rigDxf hero - pan/zoom DXF preview with layers",
   "window": { "width": 1100, "height": 700, "title": "rigDxf - DXF preview" },
   "dependencies": [
     { "name": "rigComponent", "url": "https://github.com/rigkid/rigComponent.git", "ref": "main" },

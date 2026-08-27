@@ -1,17 +1,8 @@
 #include "app.h"
 
-#include <algorithm>
-#include <cctype>
-#include <cmath>
-#include <filesystem>
-#include <spdlog/spdlog.h>
-#include <string>
-#include <vector>
-
-#include "core/RigKitEngine.h"
 #include "core/pack/MPack.h"
+#include "core/RigKitEngine.h"
 #include "core/util/AppPaths.h"
-#include "imgui.h"
 #include "packs/rigComponent/src/PrimitiveVertices.h"
 #include "packs/rigComponent/src/rig.h"
 #include "packs/rigComponent/src/rigComponent.h"
@@ -23,6 +14,15 @@
 #include "packs/rigPlotComponent/src/PathFlatten.h"
 #include "packs/rigPlotComponent/src/rigPlotComponent.h"
 #include "packs/rigSystems/src/rigSystems.h"
+#include "imgui.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <filesystem>
+#include <spdlog/spdlog.h>
+#include <string>
+#include <vector>
 
 namespace {
 
