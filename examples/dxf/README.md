@@ -4,6 +4,8 @@
 
 Pan/zoom preview of a mounting-plate fixture (`data/demo.dxf`): rounded plate, holes, arc/ellipse/spline, INSERT blocks, and a faceted 24-gon for Promote Curves.
 
+This example is the 2D subset. Text, dimensions, and anything dxflib does not parse are dropped. See [DXF coverage](../../docs/dxf-coverage.md).
+
 ## Build-n-Run
 
 ```bash

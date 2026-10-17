@@ -1,15 +1,18 @@
 #include "DxfLoader.h"
 
+#include <glm/glm.hpp>
+
+#include "PathFlatten.h"
+#include "PrimitiveVertices.h"
 #include "dl_attributes.h"
 #include "dl_codes.h"
 #include "dl_creationadapter.h"
 #include "dl_dxf.h"
 #include "dl_entities.h"
 #include "dl_writer_ascii.h"
-#include "PathFlatten.h"
-#include "PrimitiveVertices.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <map>
@@ -50,10 +53,10 @@ glm::vec4 color24ToRgba(int color24) {
 
 /// Fallback hue for layers that say BYLAYER without ever declaring a colour.
 glm::vec4 paletteColor(int index) {
-	static const glm::vec4 kPalette[] = {
-		{1.00f, 0.31f, 0.31f, 1.f}, {0.31f, 0.78f, 0.31f, 1.f}, {0.31f, 0.55f, 1.00f, 1.f},
-		{1.00f, 0.78f, 0.24f, 1.f}, {0.78f, 0.31f, 1.00f, 1.f}, {0.31f, 0.86f, 0.86f, 1.f},
-		{1.00f, 0.55f, 0.24f, 1.f}, {0.78f, 0.78f, 0.78f, 1.f}};
+	static const glm::vec4 kPalette[] = {{1.00f, 0.31f, 0.31f, 1.f}, {0.31f, 0.78f, 0.31f, 1.f},
+										 {0.31f, 0.55f, 1.00f, 1.f}, {1.00f, 0.78f, 0.24f, 1.f},
+										 {0.78f, 0.31f, 1.00f, 1.f}, {0.31f, 0.86f, 0.86f, 1.f},
+										 {1.00f, 0.55f, 0.24f, 1.f}, {0.78f, 0.78f, 0.78f, 1.f}};
 	const int count = static_cast<int>(sizeof(kPalette) / sizeof(kPalette[0]));
 	return kPalette[((index % count) + count) % count];
 }
@@ -131,29 +134,59 @@ ecs::CArc fullTurnOf(const ecs::CEllipse& ellipse) {
 	return arc;
 }
 
-float pointRunLength(const std::vector<glm::vec2>& pts) {
-	float sum = 0.f;
-	for (std::size_t i = 1; i < pts.size(); ++i) {
-		sum += glm::length(pts[i] - pts[i - 1]);
+float chordError(const glm::vec2& mid, const glm::vec2& a, const glm::vec2& b) {
+	const glm::vec2 ab = b - a;
+	const float len2 = glm::dot(ab, ab);
+	if (len2 < 1e-12f) {
+		return glm::length(mid - a);
 	}
-	return sum;
+	const float t = glm::dot(mid - a, ab) / len2;
+	return glm::length(mid - (a + t * ab));
 }
 
 std::vector<glm::vec2> splinePolyline(const ecs::CSpline& spline, float tolMm) {
-	const auto& hint = spline.controlPoints.empty() ? spline.fitPoints : spline.controlPoints;
-	// Sample density follows the requested chord tolerance through the length of
-	// the defining point run - a NURBS never strays far from it.
-	const float step = std::max(tolMm * 8.f, 0.1f);
-	const int segments =
-		std::clamp(static_cast<int>(std::ceil(pointRunLength(hint) / step)), 16, 4096);
-
-	std::vector<glm::vec2> pts = ecs::verticesOf(spline, segments);
-	if (!pts.empty()) {
+	if (ecs::verticesOf(spline, 2).empty()) {
+		std::vector<glm::vec2> pts =
+			spline.controlPoints.empty() ? spline.fitPoints : spline.controlPoints;
+		if (spline.closed && pts.size() > 2) {
+			pts.push_back(pts.front());
+		}
 		return pts;
 	}
-	// Fit-point-only or short knot vector: the defining run is the best we have.
-	pts = spline.controlPoints.empty() ? spline.fitPoints : spline.controlPoints;
-	if (spline.closed && pts.size() > 2) {
+
+	const float tol = tolMm > 0.f ? tolMm : 0.25f;
+	constexpr int kSeeds = 16;
+	constexpr int kMaxDepth = 12;
+	constexpr int kMaxPoints = 4096;
+
+	std::vector<glm::vec2> pts;
+	pts.reserve(static_cast<std::size_t>(kSeeds) + 1);
+	int remaining = kMaxPoints;
+	pts.push_back(ecs::pointOn(spline, 0.f));
+
+	const auto subdiv = [&](auto& self, const glm::vec2& a, const glm::vec2& b, float t0, float t1,
+							int depth) -> void {
+		if (remaining <= 0) {
+			pts.push_back(b);
+			return;
+		}
+		const float tm = 0.5f * (t0 + t1);
+		const glm::vec2 mid = ecs::pointOn(spline, tm);
+		if (chordError(mid, a, b) <= tol || depth >= kMaxDepth) {
+			pts.push_back(b);
+			--remaining;
+			return;
+		}
+		self(self, a, mid, t0, tm, depth + 1);
+		self(self, mid, b, tm, t1, depth + 1);
+	};
+
+	for (int i = 0; i < kSeeds; ++i) {
+		const float t0 = static_cast<float>(i) / static_cast<float>(kSeeds);
+		const float t1 = static_cast<float>(i + 1) / static_cast<float>(kSeeds);
+		subdiv(subdiv, ecs::pointOn(spline, t0), ecs::pointOn(spline, t1), t0, t1, 0);
+	}
+	if (spline.closed && pts.size() > 2 && glm::distance(pts.front(), pts.back()) > 1e-6f) {
 		pts.push_back(pts.front());
 	}
 	return pts;
@@ -190,6 +223,10 @@ std::vector<std::vector<glm::vec2>> contoursOfEntity(const Entity& entity, float
 		return {std::move(pts)};
 	}
 	case Entity::Kind::Point:
+	case Entity::Kind::Text:
+	case Entity::Kind::Image:
+	case Entity::Kind::XLine:
+	case Entity::Kind::Ray:
 		return {};
 	}
 	return {};
@@ -240,6 +277,19 @@ void recomputeBounds(Document& doc) {
 			continue;
 		}
 		for (const auto& entity : layer.entities) {
+			if (entity.kind == Entity::Kind::Text) {
+				b.add(entity.text.baseline);
+				continue;
+			}
+			if (entity.kind == Entity::Kind::Image) {
+				b.add(entity.image.pos);
+				b.add(entity.image.pos + entity.image.size);
+				continue;
+			}
+			if (entity.kind == Entity::Kind::XLine || entity.kind == Entity::Kind::Ray) {
+				b.add(entity.xlineOrigin);
+				continue;
+			}
 			glm::vec2 point{0.f, 0.f};
 			if (pointOfEntity(entity, point)) {
 				b.add(point);
@@ -300,8 +350,7 @@ Entity makeCircleEntity(const glm::vec2& center, float radius) {
 	return e;
 }
 
-Entity makeArcEntity(const glm::vec2& center, float radius, float startDegrees,
-					 float endDegrees) {
+Entity makeArcEntity(const glm::vec2& center, float radius, float startDegrees, float endDegrees) {
 	Entity e;
 	e.kind = Entity::Kind::Arc;
 	e.arc.cx = center.x;
@@ -387,9 +436,8 @@ std::optional<ecs::CArc> arcFromBulge(const glm::vec2& p1, const glm::vec2& p2, 
 	const glm::vec2 mid = (p1 + p2) * 0.5f;
 	const glm::vec2 chord = p2 - p1;
 	const glm::vec2 normal = glm::normalize(glm::vec2(-chord.y, chord.x));
-	const float offset = std::abs(halfTan) < 1e-9
-							 ? 0.f
-							 : static_cast<float>((chordLen * 0.5) / halfTan);
+	const float offset =
+		std::abs(halfTan) < 1e-9 ? 0.f : static_cast<float>((chordLen * 0.5) / halfTan);
 	const glm::vec2 center = mid + normal * offset;
 
 	ecs::CArc arc;
@@ -646,9 +694,134 @@ Entity xformEntity(const Entity& src, const InsertXform& t) {
 			p = xformPoint(t, p);
 		}
 		break;
+	case Entity::Kind::Text:
+		e.text.baseline = xformPoint(t, e.text.baseline);
+		e.text.rotationDegrees += t.angleDegrees;
+		e.text.size *= std::max(std::abs(t.sx), std::abs(t.sy));
+		break;
+	case Entity::Kind::Image:
+		e.image.pos = xformPoint(t, e.image.pos);
+		e.image.size.x *= std::abs(t.sx);
+		e.image.size.y *= std::abs(t.sy);
+		break;
+	case Entity::Kind::XLine:
+	case Entity::Kind::Ray:
+		e.xlineOrigin = xformPoint(t, e.xlineOrigin);
+		e.xlineDir = xformVector(t, e.xlineDir);
+		break;
 	}
 	return e;
 }
+
+bool isDimBlockName(const std::string& name) {
+	return name.size() >= 2 && name[0] == '*' && (name[1] == 'D' || name[1] == 'd');
+}
+
+std::string cleanDxfText(std::string s) {
+	std::string out;
+	out.reserve(s.size());
+	for (std::size_t i = 0; i < s.size(); ++i) {
+		if (i + 2 < s.size() && s[i] == '%' && s[i + 1] == '%') {
+			const char code = static_cast<char>(std::tolower(static_cast<unsigned char>(s[i + 2])));
+			if (code == 'd') {
+				out += " deg";
+				i += 2;
+				continue;
+			}
+			if (code == 'c') {
+				out += "D";
+				i += 2;
+				continue;
+			}
+			if (code == 'p') {
+				out += "+/-";
+				i += 2;
+				continue;
+			}
+		}
+		if (s[i] == '\\' && i + 1 < s.size()) {
+			const char n = s[i + 1];
+			if (n == 'P' || n == 'p' || n == '~') {
+				out.push_back(' ');
+				++i;
+				continue;
+			}
+			if (n == '\\' || n == '{' || n == '}') {
+				out.push_back(n);
+				++i;
+				continue;
+			}
+			// Skip a formatting code until ';' or end of token.
+			std::size_t j = i + 1;
+			while (j < s.size() && s[j] != ';' && s[j] != '\\' && s[j] != '{') {
+				++j;
+			}
+			if (j < s.size() && s[j] == ';') {
+				i = j;
+				continue;
+			}
+		}
+		if (s[i] == '{' || s[i] == '}') {
+			continue;
+		}
+		out.push_back(s[i]);
+	}
+	return out;
+}
+
+Entity makeTextEntity(const std::string& utf8, const glm::vec2& baseline, float height,
+					  float rotationDegrees) {
+	Entity e;
+	e.kind = Entity::Kind::Text;
+	e.text.text = cleanDxfText(utf8);
+	e.text.size = height > 0.f ? height : 2.5f;
+	e.text.baseline = baseline;
+	e.text.rotationDegrees = rotationDegrees;
+	return e;
+}
+
+Entity makeXLineEntity(Entity::Kind kind, const glm::vec2& origin, const glm::vec2& dir) {
+	Entity e;
+	e.kind = kind;
+	e.xlineOrigin = origin;
+	const float len = glm::length(dir);
+	e.xlineDir = len > 1e-12f ? dir / len : glm::vec2{1.f, 0.f};
+	return e;
+}
+
+// Clip infinite / half line to an AABB (Liang-Barsky).
+bool clipAxisLine(const glm::vec2& origin, const glm::vec2& dir, float minX, float minY, float maxX,
+				  float maxY, bool ray, glm::vec2& a, glm::vec2& b) {
+	if (maxX <= minX || maxY <= minY) {
+		return false;
+	}
+	float t0 = ray ? 0.f : -1e6f;
+	float t1 = 1e6f;
+	const float p[4] = {-dir.x, dir.x, -dir.y, dir.y};
+	const float q[4] = {origin.x - minX, maxX - origin.x, origin.y - minY, maxY - origin.y};
+	for (int i = 0; i < 4; ++i) {
+		if (std::abs(p[i]) < 1e-12f) {
+			if (q[i] < 0.f) {
+				return false;
+			}
+			continue;
+		}
+		const float t = q[i] / p[i];
+		if (p[i] < 0.f) {
+			t0 = std::max(t0, t);
+		} else {
+			t1 = std::min(t1, t);
+		}
+	}
+	if (t0 > t1) {
+		return false;
+	}
+	a = origin + dir * t0;
+	b = origin + dir * t1;
+	return glm::length(b - a) > 1e-6f;
+}
+
+ecs::CPath pathOfEntity(const Entity& entity, float tolMm);
 
 // -------------------- dxflib adapter --------------------
 
@@ -657,13 +830,32 @@ struct Block {
 	std::vector<Entity> entities;
 };
 
+/** @brief Constant / vertex geometric width on the polyline being read (mm). */
+float polylineGeomWidthMm(DL_Dxf* reader) {
+	if (!reader) {
+		return 0.f;
+	}
+	// LWPOLYLINE 43 = constant width. Else 40/41 start/end (last vertex wins).
+	double w = reader->getRealValue(43, 0.0);
+	if (w <= 0.0) {
+		w = reader->getRealValue(40, 0.0);
+	}
+	if (w <= 0.0) {
+		w = reader->getRealValue(41, 0.0);
+	}
+	return static_cast<float>(w);
+}
+
 /** @brief dxflib callbacks to typed POD entities, layer by layer. */
 class RigDxfAdapter : public DL_CreationAdapter {
   public:
+	void bindReader(DL_Dxf* reader) { m_reader = reader; }
+
 	void addLayer(const DL_LayerData& data) override {
 		m_layerColors[data.name] =
 			resolveLayerColor(getAttributes(), static_cast<int>(m_layers.size()));
-		ensureLayer(data.name);
+		Layer& layer = ensureLayer(data.name);
+		layer.visible = !data.off && (data.flags & 1) == 0;
 	}
 
 	void addPoint(const DL_PointData& d) override {
@@ -707,6 +899,7 @@ class RigDxfAdapter : public DL_CreationAdapter {
 
 	void addPolyline(const DL_PolylineData& d) override {
 		m_polylineClosed = (d.flags & 1) != 0;
+		m_polylineWidthMm = polylineGeomWidthMm(m_reader);
 		m_pendingVertices.clear();
 	}
 
@@ -751,15 +944,18 @@ class RigDxfAdapter : public DL_CreationAdapter {
 		if (pts.size() < 2) {
 			return;
 		}
-		pushEntity(makePolylineEntity(pts));
+		Entity e = makePolylineEntity(pts);
+		e.filled = true;
+		pushEntity(std::move(e));
 	}
 
 	void addSolid(const DL_SolidData& d) override { addTrace(d); }
 
 	void add3dFace(const DL_3dFaceData& d) override { addTrace(d); }
 
-	void addHatch(const DL_HatchData&) override {
+	void addHatch(const DL_HatchData& d) override {
 		m_hatchActive = true;
+		m_hatchSolid = d.solid;
 		m_hatchEntities.clear();
 	}
 
@@ -772,7 +968,14 @@ class RigDxfAdapter : public DL_CreationAdapter {
 	}
 
 	void addBlock(const DL_BlockData& data) override {
-		if (data.name.empty() || data.name[0] == '*') {
+		m_dimBlock = false;
+		if (data.name.empty()) {
+			m_collectingBlock = false;
+			m_activeBlock.clear();
+			return;
+		}
+		const bool dim = isDimBlockName(data.name);
+		if (data.name[0] == '*' && !dim) {
 			m_collectingBlock = false;
 			m_activeBlock.clear();
 			return;
@@ -781,6 +984,7 @@ class RigDxfAdapter : public DL_CreationAdapter {
 		m_blocks[m_activeBlock].base =
 			glm::vec2(static_cast<float>(data.bpx), static_cast<float>(data.bpy));
 		m_collectingBlock = true;
+		m_dimBlock = dim;
 	}
 
 	void endBlock() override {
@@ -793,10 +997,39 @@ class RigDxfAdapter : public DL_CreationAdapter {
 	void endEntity() override {
 		if (m_hatchActive) {
 			m_hatchActive = false;
-			for (auto& e : m_hatchEntities) {
-				pushEntity(std::move(e));
+			if (m_hatchSolid) {
+				ecs::CPath combined;
+				for (const auto& e : m_hatchEntities) {
+					const ecs::CPath piece = pathOfEntity(e, 0.25f);
+					combined.commands.insert(combined.commands.end(), piece.commands.begin(),
+											 piece.commands.end());
+				}
+				if (combined.commands.size() >= 2) {
+					Entity e;
+					e.kind = Entity::Kind::Path;
+					e.path = std::move(combined);
+					e.filled = true;
+					pushEntity(std::move(e));
+				}
+			} else {
+				for (auto& e : m_hatchEntities) {
+					pushEntity(std::move(e));
+				}
 			}
 			m_hatchEntities.clear();
+			m_hatchSolid = false;
+			return;
+		}
+		if (m_leaderActive) {
+			m_leaderActive = false;
+			if (m_leaderPts.size() >= 2) {
+				pushEntity(makePolylineEntity(m_leaderPts));
+			}
+			m_leaderPts.clear();
+			return;
+		}
+		if (m_mtextPending) {
+			flushMText();
 			return;
 		}
 		if (!m_pendingVertices.empty()) {
@@ -808,42 +1041,110 @@ class RigDxfAdapter : public DL_CreationAdapter {
 
 	void endSequence() override { flushSpline(); }
 
-	void addXLine(const DL_XLineData&) override { noteSkipped("XLINE"); }
-	void addRay(const DL_RayData&) override { noteSkipped("RAY"); }
-	void addText(const DL_TextData&) override { noteSkipped("TEXT"); }
-	void addMText(const DL_MTextData&) override { noteSkipped("MTEXT"); }
-	void addArcAlignedText(const DL_ArcAlignedTextData&) override { noteSkipped("ARCALIGNEDTEXT"); }
-	void addAttribute(const DL_AttributeData&) override { noteSkipped("ATTRIB"); }
-	void addDimAlign(const DL_DimensionData&, const DL_DimAlignedData&) override {
-		noteSkipped("DIMENSION");
+	void addXLine(const DL_XLineData& d) override {
+		pushEntity(makeXLineEntity(Entity::Kind::XLine,
+								   {static_cast<float>(d.bx), static_cast<float>(d.by)},
+								   {static_cast<float>(d.dx), static_cast<float>(d.dy)}));
 	}
-	void addDimLinear(const DL_DimensionData&, const DL_DimLinearData&) override {
-		noteSkipped("DIMENSION");
+	void addRay(const DL_RayData& d) override {
+		pushEntity(makeXLineEntity(Entity::Kind::Ray,
+								   {static_cast<float>(d.bx), static_cast<float>(d.by)},
+								   {static_cast<float>(d.dx), static_cast<float>(d.dy)}));
 	}
-	void addDimRadial(const DL_DimensionData&, const DL_DimRadialData&) override {
-		noteSkipped("DIMENSION");
+	void addText(const DL_TextData& d) override { pushText(d); }
+	void addMText(const DL_MTextData& d) override {
+		flushMText();
+		m_mtext = d;
+		m_mtextPending = true;
 	}
-	void addDimDiametric(const DL_DimensionData&, const DL_DimDiametricData&) override {
-		noteSkipped("DIMENSION");
+	void addMTextChunk(const std::string& chunk) override {
+		if (m_mtextPending) {
+			m_mtext.text += chunk;
+		}
 	}
-	void addDimAngular(const DL_DimensionData&, const DL_DimAngular2LData&) override {
-		noteSkipped("DIMENSION");
+	void addArcAlignedText(const DL_ArcAlignedTextData& d) override {
+		const float mid = 0.5f * static_cast<float>(d.startAngle + d.endAngle);
+		const float radius = static_cast<float>(d.radius + d.offset);
+		pushEntity(makeTextEntity(d.text,
+								  {static_cast<float>(d.cx) + radius * std::cos(mid),
+								   static_cast<float>(d.cy) + radius * std::sin(mid)},
+								  static_cast<float>(d.height), mid * kRadToDeg));
 	}
-	void addDimAngular3P(const DL_DimensionData&, const DL_DimAngular3PData&) override {
-		noteSkipped("DIMENSION");
+	void addAttribute(const DL_AttributeData& d) override { pushText(d); }
+	void addDimAlign(const DL_DimensionData& d, const DL_DimAlignedData&) override {
+		rememberDimText(d);
 	}
-	void addDimOrdinate(const DL_DimensionData&, const DL_DimOrdinateData&) override {
-		noteSkipped("DIMENSION");
+	void addDimLinear(const DL_DimensionData& d, const DL_DimLinearData&) override {
+		rememberDimText(d);
 	}
-	void addLeader(const DL_LeaderData&) override { noteSkipped("LEADER"); }
-	void addLeaderVertex(const DL_LeaderVertexData&) override {}
-	void addImage(const DL_ImageData&) override { noteSkipped("IMAGE"); }
-	void linkImage(const DL_ImageDefData&) override {}
+	void addDimRadial(const DL_DimensionData& d, const DL_DimRadialData&) override {
+		rememberDimText(d);
+	}
+	void addDimDiametric(const DL_DimensionData& d, const DL_DimDiametricData&) override {
+		rememberDimText(d);
+	}
+	void addDimAngular(const DL_DimensionData& d, const DL_DimAngular2LData&) override {
+		rememberDimText(d);
+	}
+	void addDimAngular3P(const DL_DimensionData& d, const DL_DimAngular3PData&) override {
+		rememberDimText(d);
+	}
+	void addDimOrdinate(const DL_DimensionData& d, const DL_DimOrdinateData&) override {
+		rememberDimText(d);
+	}
+	void addLeader(const DL_LeaderData&) override {
+		m_leaderActive = true;
+		m_leaderPts.clear();
+	}
+	void addLeaderVertex(const DL_LeaderVertexData& d) override {
+		m_leaderPts.emplace_back(static_cast<float>(d.x), static_cast<float>(d.y));
+	}
+	void addImage(const DL_ImageData& d) override {
+		Entity e;
+		e.kind = Entity::Kind::Image;
+		e.image.pos = {static_cast<float>(d.ipx), static_cast<float>(d.ipy)};
+		const float px = static_cast<float>(std::max(1, d.width));
+		const float py = static_cast<float>(std::max(1, d.height));
+		e.image.size = {static_cast<float>(std::hypot(d.ux, d.uy)) * px,
+						static_cast<float>(std::hypot(d.vx, d.vy)) * py};
+		const auto it = m_imageFiles.find(d.ref);
+		e.image.href = (it != m_imageFiles.end()) ? it->second : d.ref;
+		e.image.opacity = 1.f - static_cast<float>(d.fade) / 100.f;
+		pushEntity(std::move(e));
+	}
+	void linkImage(const DL_ImageDefData& d) override {
+		if (d.ref.empty()) {
+			return;
+		}
+		m_imageFiles[d.ref] = d.file;
+		auto patch = [&](Entity& e) {
+			if (e.kind == Entity::Kind::Image && e.image.href == d.ref) {
+				e.image.href = d.file;
+			}
+		};
+		for (auto& layer : m_layers) {
+			for (auto& e : layer.entities) {
+				patch(e);
+			}
+		}
+		for (auto& [name, block] : m_blocks) {
+			(void)name;
+			for (auto& e : block.entities) {
+				patch(e);
+			}
+		}
+	}
 
 	/** @brief Finish deferred work and hand over the layers. */
 	std::vector<Layer> takeLayers() {
 		flushSpline();
+		flushMText();
 		flushPendingInserts();
+		m_collectingBlock = false;
+		m_dimBlock = false;
+		m_activeBlock.clear();
+		flushDimensionBlocks();
+		resolveImageHrefs();
 		return std::move(m_layers);
 	}
 
@@ -876,16 +1177,28 @@ class RigDxfAdapter : public DL_CreationAdapter {
 	std::map<std::string, Block> m_blocks;
 
 	bool m_collectingBlock = false;
+	bool m_dimBlock = false;
 	std::string m_activeBlock;
+	DL_MTextData m_mtext{0, 0, 0, 1, 0, 0, 2.5, 0, 7, 1, 1, 1.0, "", "Standard", 0};
+	bool m_mtextPending = false;
+	std::vector<Entity> m_dimFallbackTexts;
+	bool m_flushedDimGeometry = false;
 
+	DL_Dxf* m_reader = nullptr;
 	std::vector<BulgeVertex> m_pendingVertices;
 	bool m_polylineClosed = false;
+	float m_polylineWidthMm = 0.f;
 
 	ecs::CSpline m_spline;
 	bool m_splinePending = false;
 
 	bool m_hatchActive = false;
+	bool m_hatchSolid = false;
 	std::vector<Entity> m_hatchEntities;
+
+	bool m_leaderActive = false;
+	std::vector<glm::vec2> m_leaderPts;
+	std::map<std::string, std::string> m_imageFiles;
 
 	std::vector<DL_InsertData> m_pendingInserts;
 	std::map<std::string, int> m_skipped;
@@ -926,7 +1239,101 @@ class RigDxfAdapter : public DL_CreationAdapter {
 		}
 		e.layer = layerName;
 		e.color = resolveEntityColor(getAttributes(), layerColorFor(layerName));
+		if (e.strokeWidthMm <= 0.f) {
+			const int width = getAttributes().getWidth();
+			if (width > 0) {
+				e.strokeWidthMm = static_cast<float>(width) * 0.01f;
+			}
+		}
+		if (m_dimBlock) {
+			e.fromDimension = true;
+		}
+		if (e.kind == Entity::Kind::Text) {
+			e.text.rgba = e.color;
+		}
 		pushToTarget(std::move(e));
+	}
+
+	void resolveImageHrefs() {
+		auto patch = [&](Entity& e) {
+			if (e.kind != Entity::Kind::Image) {
+				return;
+			}
+			const auto it = m_imageFiles.find(e.image.href);
+			if (it != m_imageFiles.end()) {
+				e.image.href = it->second;
+			}
+		};
+		for (auto& layer : m_layers) {
+			for (auto& e : layer.entities) {
+				patch(e);
+			}
+		}
+		for (auto& [name, block] : m_blocks) {
+			(void)name;
+			for (auto& e : block.entities) {
+				patch(e);
+			}
+		}
+	}
+
+	void pushText(const DL_TextData& d) {
+		const bool useAlign = d.hJustification != 0 || d.vJustification != 0;
+		const glm::vec2 origin =
+			useAlign ? glm::vec2(static_cast<float>(d.apx), static_cast<float>(d.apy))
+					 : glm::vec2(static_cast<float>(d.ipx), static_cast<float>(d.ipy));
+		pushEntity(makeTextEntity(d.text, origin, static_cast<float>(d.height),
+								  static_cast<float>(d.angle)));
+	}
+
+	void flushMText() {
+		if (!m_mtextPending) {
+			return;
+		}
+		m_mtextPending = false;
+		float angle = static_cast<float>(m_mtext.angle);
+		if (std::abs(m_mtext.dirx) + std::abs(m_mtext.diry) > 1e-8) {
+			angle = std::atan2(static_cast<float>(m_mtext.diry), static_cast<float>(m_mtext.dirx)) *
+					kRadToDeg;
+		}
+		pushEntity(makeTextEntity(
+			m_mtext.text, {static_cast<float>(m_mtext.ipx), static_cast<float>(m_mtext.ipy)},
+			static_cast<float>(m_mtext.height), angle));
+		m_mtext = DL_MTextData(0, 0, 0, 1, 0, 0, 2.5, 0, 7, 1, 1, 1.0, "", "Standard", 0);
+	}
+
+	void rememberDimText(const DL_DimensionData& d) {
+		if (d.text.empty() || d.text == "<>" || d.text == " ") {
+			return;
+		}
+		const float height = d.dimScale > 0.0 ? static_cast<float>(d.dimScale * 2.5) : 2.5f;
+		Entity e = makeTextEntity(d.text, {static_cast<float>(d.mpx), static_cast<float>(d.mpy)},
+								  height, static_cast<float>(d.angle));
+		e.fromDimension = true;
+		m_dimFallbackTexts.push_back(std::move(e));
+	}
+
+	void flushDimensionBlocks() {
+		for (const auto& [name, block] : m_blocks) {
+			if (!isDimBlockName(name)) {
+				continue;
+			}
+			for (const auto& src : block.entities) {
+				Entity e = src;
+				e.fromDimension = true;
+				if (e.kind == Entity::Kind::Text) {
+					e.text.rgba = e.color;
+				}
+				pushToTarget(std::move(e));
+				m_flushedDimGeometry = true;
+			}
+		}
+		if (!m_flushedDimGeometry) {
+			for (auto& e : m_dimFallbackTexts) {
+				pushToTarget(std::move(e));
+			}
+		}
+		m_dimFallbackTexts.clear();
 	}
 
 	void pushToTarget(Entity&& e) {
@@ -941,10 +1348,14 @@ class RigDxfAdapter : public DL_CreationAdapter {
 		std::vector<Entity> pieces;
 		appendBulgePolyline(m_pendingVertices, m_polylineClosed, pieces);
 		for (auto& e : pieces) {
+			if (m_polylineWidthMm > 0.f) {
+				e.strokeWidthMm = m_polylineWidthMm;
+			}
 			pushEntity(std::move(e));
 		}
 		m_pendingVertices.clear();
 		m_polylineClosed = false;
+		m_polylineWidthMm = 0.f;
 	}
 
 	void flushSpline() {
@@ -957,9 +1368,8 @@ class RigDxfAdapter : public DL_CreationAdapter {
 			return;
 		}
 		// Empty weights mean "all ones" - do not carry a redundant array.
-		const bool rational =
-			std::any_of(m_spline.weights.begin(), m_spline.weights.end(),
-						[](float w) { return std::abs(w - 1.f) > 1e-6f; });
+		const bool rational = std::any_of(m_spline.weights.begin(), m_spline.weights.end(),
+										  [](float w) { return std::abs(w - 1.f) > 1e-6f; });
 		if (!rational) {
 			m_spline.weights.clear();
 		}
@@ -1046,7 +1456,9 @@ ecs::CPath pathOfEntity(const Entity& entity, float tolMm) {
 	if (entity.kind == Entity::Kind::Path) {
 		return entity.path;
 	}
-	if (entity.kind == Entity::Kind::Point) {
+	if (entity.kind == Entity::Kind::Point || entity.kind == Entity::Kind::Text ||
+		entity.kind == Entity::Kind::Image || entity.kind == Entity::Kind::XLine ||
+		entity.kind == Entity::Kind::Ray) {
 		return {};
 	}
 
@@ -1232,8 +1644,7 @@ bool writeSplineEntity(DL_Dxf& dxf, DL_WriterA& dw, const ecs::CSpline& spline,
 	return true;
 }
 
-void writeContours(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity,
-				   const DL_Attributes& attrib) {
+void writeContours(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity, const DL_Attributes& attrib) {
 	auto contours = contoursOfEntity(entity, kExportTolerance);
 	for (auto& contour : contours) {
 		bool closed = false;
@@ -1253,7 +1664,52 @@ void writeContours(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity,
 	}
 }
 
-void writeEntity(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity, const DL_Attributes& attrib) {
+bool writeFilledHatch(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity,
+					  const DL_Attributes& attrib) {
+	auto contours = contoursOfEntity(entity, kExportTolerance);
+	int loops = 0;
+	for (auto& contour : contours) {
+		if (contour.size() > 2 && glm::distance(contour.front(), contour.back()) < 1e-6f) {
+			contour.pop_back();
+		}
+		if (contour.size() >= 3) {
+			++loops;
+		}
+	}
+	if (loops <= 0) {
+		return false;
+	}
+	const DL_HatchData hatch(loops, true, 1.0, 0.0, "SOLID");
+	dxf.writeHatch1(dw, hatch, attrib);
+	for (const auto& contour : contours) {
+		if (contour.size() < 3) {
+			continue;
+		}
+		const int n = static_cast<int>(contour.size());
+		dxf.writeHatchLoop1(dw, DL_HatchLoopData(n));
+		for (int i = 0; i < n; ++i) {
+			const auto& a = contour[static_cast<std::size_t>(i)];
+			const auto& b = contour[static_cast<std::size_t>((i + 1) % n)];
+			dxf.writeHatchEdge(dw, DL_HatchEdgeData(a.x, a.y, b.x, b.y));
+		}
+		dxf.writeHatchLoop2(dw, DL_HatchLoopData(n));
+	}
+	dxf.writeHatch2(dw, hatch, attrib);
+	return true;
+}
+
+struct PendingImageWrite {
+	unsigned long handle = 0;
+	DL_ImageData data{"", 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 50, 50, 0};
+};
+
+void writeEntity(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity, const DL_Attributes& attrib,
+				 std::vector<PendingImageWrite>& images) {
+	if (entity.filled && entity.kind != Entity::Kind::Text && entity.kind != Entity::Kind::Image) {
+		if (writeFilledHatch(dxf, dw, entity, attrib)) {
+			return;
+		}
+	}
 	switch (entity.kind) {
 	case Entity::Kind::Point: {
 		glm::vec2 p{0.f, 0.f};
@@ -1285,11 +1741,43 @@ void writeEntity(DL_Dxf& dxf, DL_WriterA& dw, const Entity& entity, const DL_Att
 			return;
 		}
 		break;
+	case Entity::Kind::Text: {
+		const auto& t = entity.text;
+		dxf.writeText(dw,
+					  DL_TextData(t.baseline.x, t.baseline.y, 0.0, t.baseline.x, t.baseline.y, 0.0,
+								  t.size, 1.0, 0, 0, 0, t.text, "Standard", t.rotationDegrees),
+					  attrib);
+		return;
+	}
+	case Entity::Kind::Image: {
+		const auto& img = entity.image;
+		const double sx = std::max(1e-6, static_cast<double>(img.size.x));
+		const double sy = std::max(1e-6, static_cast<double>(img.size.y));
+		PendingImageWrite pending;
+		pending.data =
+			DL_ImageData(img.href, img.pos.x, img.pos.y, 0.0, sx, 0.0, 0.0, 0.0, sy, 0.0, 1, 1, 50,
+						 50, static_cast<int>(std::lround((1.f - img.opacity) * 100.f)));
+		pending.handle = dxf.writeImage(dw, pending.data, attrib);
+		images.push_back(std::move(pending));
+		return;
+	}
+	case Entity::Kind::XLine:
+		dxf.writeXLine(dw,
+					   DL_XLineData(entity.xlineOrigin.x, entity.xlineOrigin.y, 0.0,
+									entity.xlineDir.x, entity.xlineDir.y, 0.0),
+					   attrib);
+		return;
+	case Entity::Kind::Ray:
+		dxf.writeRay(dw,
+					 DL_RayData(entity.xlineOrigin.x, entity.xlineOrigin.y, 0.0, entity.xlineDir.x,
+								entity.xlineDir.y, 0.0),
+					 attrib);
+		return;
 	case Entity::Kind::Path: {
 		const auto& cmds = entity.path.commands;
 		if (cmds.size() == 2 && cmds[0].type == Cmd::MoveTo && cmds[1].type == Cmd::LineTo) {
-			dxf.writeLine(dw, DL_LineData(cmds[0].p.x, cmds[0].p.y, 0.0, cmds[1].p.x, cmds[1].p.y,
-										  0.0),
+			dxf.writeLine(dw,
+						  DL_LineData(cmds[0].p.x, cmds[0].p.y, 0.0, cmds[1].p.x, cmds[1].p.y, 0.0),
 						  attrib);
 			return;
 		}
@@ -1317,6 +1805,7 @@ bool loadFile(const std::string& path, Document& out) {
 	out = {};
 	RigDxfAdapter adapter;
 	DL_Dxf reader;
+	adapter.bindReader(&reader);
 	if (!reader.in(path, &adapter)) {
 		out.errors.push_back("rigDxf: could not read '" + path + "'");
 		return false;
@@ -1330,6 +1819,7 @@ bool loadBuffer(const std::vector<char>& bytes, Document& out) {
 	std::istringstream stream(std::string(bytes.begin(), bytes.end()));
 	RigDxfAdapter adapter;
 	DL_Dxf reader;
+	adapter.bindReader(&reader);
 	if (!reader.in(stream, &adapter)) {
 		out.errors.push_back("rigDxf: could not parse DXF buffer");
 		return false;
@@ -1351,36 +1841,294 @@ bool loadFile(const std::string& path, plot::ParsedPathDoc& out) {
 void flattenToParsed(const Document& doc, plot::ParsedPathDoc& out, float tolMm) {
 	out = {};
 	Bounds bounds;
+	struct PendingClip {
+		std::size_t layerIndex = 0;
+		Entity entity;
+	};
+	std::vector<PendingClip> clips;
+
+	auto pushPath = [&](plot::PathSourceLayer& dst, const Entity& entity, ecs::CPath path) {
+		if (path.commands.size() < 2) {
+			return;
+		}
+		for (const auto& contour : plot::flattenPathContours(path, tolMm)) {
+			for (const auto& p : contour) {
+				bounds.add(p);
+			}
+		}
+		dst.paths.paths.push_back(std::move(path));
+		dst.paths.pathColors.push_back(entity.color);
+		dst.paths.pathFilled.push_back(entity.filled ? 1 : 0);
+		dst.paths.pathStroked.push_back(entity.filled ? 0 : 1);
+		// Always store a slot so later fallbacks do not become 1 mm.
+		dst.paths.pathStrokeWidths.resize(dst.paths.paths.size(), 0.f);
+		if (entity.strokeWidthMm > 0.f) {
+			dst.paths.pathStrokeWidths.back() = entity.strokeWidthMm;
+		}
+	};
+
 	for (const auto& layer : doc.layers) {
 		plot::PathSourceLayer dst;
 		dst.name = layer.name.empty() ? "0" : layer.name;
 		dst.layerColor = layer.color;
+		dst.visible = layer.visible;
 
 		for (const auto& entity : layer.entities) {
-			ecs::CPath path = pathOfEntity(entity, tolMm);
-			if (path.commands.size() < 2) {
+			if (entity.kind == Entity::Kind::Text) {
+				if (!entity.text.text.empty()) {
+					ecs::TextItem item = entity.text;
+					item.rgba = entity.color;
+					dst.texts.items.push_back(std::move(item));
+					bounds.add(entity.text.baseline);
+				}
 				continue;
 			}
-			for (const auto& contour : plot::flattenPathContours(path, tolMm)) {
-				for (const auto& p : contour) {
-					bounds.add(p);
-				}
+			if (entity.kind == Entity::Kind::Image) {
+				dst.images.push_back(entity.image);
+				bounds.add(entity.image.pos);
+				bounds.add(entity.image.pos + entity.image.size);
+				continue;
 			}
-			dst.paths.paths.push_back(std::move(path));
-			dst.paths.pathColors.push_back(entity.color);
-			dst.paths.pathFilled.push_back(0);
-			dst.paths.pathStroked.push_back(1);
+			if (entity.kind == Entity::Kind::XLine || entity.kind == Entity::Kind::Ray) {
+				PendingClip pending;
+				pending.layerIndex = out.layers.size();
+				pending.entity = entity;
+				clips.push_back(std::move(pending));
+				continue;
+			}
+			pushPath(dst, entity, pathOfEntity(entity, tolMm));
 		}
 
-		if (!dst.paths.paths.empty()) {
-			out.layers.push_back(std::move(dst));
-		}
+		out.layers.push_back(std::move(dst));
 	}
+
+	float minX = bounds.empty ? -100.f : bounds.minX;
+	float minY = bounds.empty ? -100.f : bounds.minY;
+	float maxX = bounds.empty ? 100.f : bounds.maxX;
+	float maxY = bounds.empty ? 100.f : bounds.maxY;
+	const float padX = std::max(10.f, (maxX - minX) * 0.1f);
+	const float padY = std::max(10.f, (maxY - minY) * 0.1f);
+	minX -= padX;
+	minY -= padY;
+	maxX += padX;
+	maxY += padY;
+
+	for (const auto& clip : clips) {
+		if (clip.layerIndex >= out.layers.size()) {
+			continue;
+		}
+		glm::vec2 a{0.f, 0.f};
+		glm::vec2 b{0.f, 0.f};
+		if (!clipAxisLine(clip.entity.xlineOrigin, clip.entity.xlineDir, minX, minY, maxX, maxY,
+						  clip.entity.kind == Entity::Kind::Ray, a, b)) {
+			continue;
+		}
+		pushPath(out.layers[clip.layerIndex], clip.entity, makeLineEntity(a, b).path);
+	}
+
+	out.layers.erase(std::remove_if(out.layers.begin(), out.layers.end(),
+									[](const plot::PathSourceLayer& l) {
+										return l.paths.paths.empty() && l.texts.items.empty() &&
+											   l.images.empty();
+									}),
+					 out.layers.end());
 
 	out.minX = bounds.empty ? 0.f : bounds.minX;
 	out.minY = bounds.empty ? 0.f : bounds.minY;
 	out.contentW = bounds.empty ? 0.f : (bounds.maxX - bounds.minX);
 	out.contentH = bounds.empty ? 0.f : (bounds.maxY - bounds.minY);
+}
+
+void joinConnectedPaths(Document& doc, float tolMm) {
+	const float tol = std::max(tolMm, 1e-6f);
+	bool any = false;
+
+	for (auto& layer : doc.layers) {
+		struct Open {
+			std::vector<glm::vec2> pts;
+			glm::vec4 color{0.f, 0.f, 0.f, 1.f};
+			std::string name;
+		};
+		std::vector<Open> open;
+		std::vector<Entity> keep;
+		keep.reserve(layer.entities.size());
+
+		for (auto& entity : layer.entities) {
+			if (entity.kind != Entity::Kind::Path) {
+				keep.push_back(std::move(entity));
+				continue;
+			}
+			std::vector<glm::vec2> pts;
+			bool closed = false;
+			if (!polylineAnchors(entity.path, pts, closed) || closed) {
+				keep.push_back(std::move(entity));
+				continue;
+			}
+			Open o;
+			o.pts = std::move(pts);
+			o.color = entity.color;
+			o.name = entity.layer;
+			open.push_back(std::move(o));
+		}
+
+		std::vector<char> used(open.size(), 0);
+		std::vector<Open> joined;
+		joined.reserve(open.size());
+		for (std::size_t i = 0; i < open.size(); ++i) {
+			if (used[i]) {
+				continue;
+			}
+			used[i] = 1;
+			Open cur = std::move(open[i]);
+			bool grew = true;
+			while (grew) {
+				grew = false;
+				for (std::size_t j = 0; j < open.size(); ++j) {
+					if (used[j]) {
+						continue;
+					}
+					auto& cand = open[j];
+					if (glm::distance(cur.pts.back(), cand.pts.front()) <= tol) {
+						cur.pts.insert(cur.pts.end(), cand.pts.begin() + 1, cand.pts.end());
+					} else if (glm::distance(cur.pts.back(), cand.pts.back()) <= tol) {
+						cur.pts.insert(cur.pts.end(), cand.pts.rbegin() + 1, cand.pts.rend());
+					} else if (glm::distance(cur.pts.front(), cand.pts.back()) <= tol) {
+						cur.pts.insert(cur.pts.begin(), cand.pts.begin(), cand.pts.end() - 1);
+					} else if (glm::distance(cur.pts.front(), cand.pts.front()) <= tol) {
+						cur.pts.insert(cur.pts.begin(), cand.pts.rbegin(), cand.pts.rend() - 1);
+					} else {
+						continue;
+					}
+					used[j] = 1;
+					grew = true;
+				}
+			}
+			if (cur.pts.size() > 2 && glm::distance(cur.pts.front(), cur.pts.back()) <= tol) {
+				cur.pts.back() = cur.pts.front();
+			}
+			joined.push_back(std::move(cur));
+		}
+
+		if (joined.size() < open.size()) {
+			any = true;
+		}
+		for (auto& piece : joined) {
+			Entity e = makePolylineEntity(piece.pts);
+			e.color = piece.color;
+			e.layer = piece.name;
+			keep.push_back(std::move(e));
+		}
+		layer.entities = std::move(keep);
+	}
+
+	if (any) {
+		recomputeBounds(doc);
+	}
+}
+
+void translate(Document& doc, const glm::vec2& delta) {
+	if (std::fabs(delta.x) < 1e-8f && std::fabs(delta.y) < 1e-8f) {
+		return;
+	}
+	for (auto& layer : doc.layers) {
+		for (auto& entity : layer.entities) {
+			switch (entity.kind) {
+			case Entity::Kind::Path:
+			case Entity::Kind::Point:
+				for (auto& cmd : entity.path.commands) {
+					if (cmd.type == Cmd::CubicTo) {
+						cmd.c1 += delta;
+						cmd.c2 += delta;
+					} else if (cmd.type == Cmd::QuadTo) {
+						cmd.c1 += delta;
+					}
+					if (cmd.type != Cmd::Close) {
+						cmd.p += delta;
+					}
+				}
+				break;
+			case Entity::Kind::Arc:
+				entity.arc.cx += delta.x;
+				entity.arc.cy += delta.y;
+				break;
+			case Entity::Kind::Ellipse:
+				entity.ellipse.cx += delta.x;
+				entity.ellipse.cy += delta.y;
+				break;
+			case Entity::Kind::Spline:
+				for (auto& p : entity.spline.controlPoints) {
+					p += delta;
+				}
+				for (auto& p : entity.spline.fitPoints) {
+					p += delta;
+				}
+				break;
+			case Entity::Kind::Text:
+				entity.text.baseline += delta;
+				break;
+			case Entity::Kind::Image:
+				entity.image.pos += delta;
+				break;
+			case Entity::Kind::XLine:
+			case Entity::Kind::Ray:
+				entity.xlineOrigin += delta;
+				break;
+			}
+		}
+	}
+	recomputeBounds(doc);
+}
+
+void originToPage(Document& doc) {
+	recomputeBounds(doc);
+	translate(doc, {-doc.minX, -doc.minY});
+}
+
+void applyImportFilter(Document& doc, const ImportFilter& filter) {
+	std::vector<Entity> dimMoved;
+	for (auto& layer : doc.layers) {
+		std::vector<Entity> keep;
+		keep.reserve(layer.entities.size());
+		for (auto& e : layer.entities) {
+			if (e.kind == Entity::Kind::Text && !e.fromDimension && !filter.text) {
+				continue;
+			}
+			if (e.fromDimension && !filter.dimensions) {
+				continue;
+			}
+			if (e.fromDimension && filter.dimensionsOwnLayer) {
+				e.layer = "Dimensions";
+				dimMoved.push_back(std::move(e));
+				continue;
+			}
+			keep.push_back(std::move(e));
+		}
+		layer.entities = std::move(keep);
+	}
+
+	if (!dimMoved.empty()) {
+		Layer* dest = nullptr;
+		for (auto& layer : doc.layers) {
+			if (layer.name == "Dimensions") {
+				dest = &layer;
+				break;
+			}
+		}
+		if (dest == nullptr) {
+			Layer layer;
+			layer.name = "Dimensions";
+			doc.layers.push_back(std::move(layer));
+			dest = &doc.layers.back();
+		}
+		for (auto& e : dimMoved) {
+			dest->entities.push_back(std::move(e));
+		}
+	}
+
+	doc.layers.erase(std::remove_if(doc.layers.begin(), doc.layers.end(),
+									[](const Layer& l) { return l.entities.empty(); }),
+					 doc.layers.end());
+	recomputeBounds(doc);
 }
 
 void flipY(Document& doc) {
@@ -1422,6 +2170,18 @@ void flipY(Document& doc) {
 				for (auto& p : entity.spline.fitPoints) {
 					p.y = top - p.y;
 				}
+				break;
+			case Entity::Kind::Text:
+				entity.text.baseline.y = top - entity.text.baseline.y;
+				entity.text.rotationDegrees = -entity.text.rotationDegrees;
+				break;
+			case Entity::Kind::Image:
+				entity.image.pos.y = top - (entity.image.pos.y + entity.image.size.y);
+				break;
+			case Entity::Kind::XLine:
+			case Entity::Kind::Ray:
+				entity.xlineOrigin.y = top - entity.xlineOrigin.y;
+				entity.xlineDir.y = -entity.xlineDir.y;
 				break;
 			}
 		}
@@ -1480,9 +2240,15 @@ CurvePromotionResult promoteCurves(Document& doc, const CurvePromotionSettings& 
 				edgesAreEven(pts, settings.facetedCircleMaxEdgeVariance)) {
 				const glm::vec4 color = entity.color;
 				const std::string layerName = entity.layer;
+				const bool filled = entity.filled;
+				const float width = entity.strokeWidthMm;
+				const bool dim = entity.fromDimension;
 				entity = makeCircleEntity(center, radius);
 				entity.color = color;
 				entity.layer = layerName;
+				entity.filled = filled;
+				entity.strokeWidthMm = width;
+				entity.fromDimension = dim;
 				++result.circlesPromoted;
 				continue;
 			}
@@ -1510,9 +2276,15 @@ CurvePromotionResult promoteCurves(Document& doc, const CurvePromotionSettings& 
 				}
 				const glm::vec4 color = entity.color;
 				const std::string layerName = entity.layer;
+				const bool filled = entity.filled;
+				const float width = entity.strokeWidthMm;
+				const bool dim = entity.fromDimension;
 				entity = makeArcEntity(center, radius, angles.front(), angles.back());
 				entity.color = color;
 				entity.layer = layerName;
+				entity.filled = filled;
+				entity.strokeWidthMm = width;
+				entity.fromDimension = dim;
 				++result.arcsPromoted;
 			}
 		}
@@ -1522,6 +2294,46 @@ CurvePromotionResult promoteCurves(Document& doc, const CurvePromotionSettings& 
 		recomputeBounds(doc);
 	}
 	return result;
+}
+
+Document documentFromParsed(const plot::ParsedPathDoc& parsed) {
+	Document doc;
+	for (const auto& src : parsed.layers) {
+		Layer layer;
+		layer.name = src.name.empty() ? "0" : src.name;
+		layer.color = src.layerColor;
+		layer.visible = src.visible;
+		for (std::size_t i = 0; i < src.paths.paths.size(); ++i) {
+			Entity e;
+			e.kind = Entity::Kind::Path;
+			e.path = src.paths.paths[i];
+			e.layer = layer.name;
+			e.color = (i < src.paths.pathColors.size()) ? src.paths.pathColors[i] : layer.color;
+			e.filled = src.paths.isFilled(i);
+			e.strokeWidthMm = src.paths.strokeWidth(i, 0.f);
+			layer.entities.push_back(std::move(e));
+		}
+		for (const auto& text : src.texts.items) {
+			Entity e;
+			e.kind = Entity::Kind::Text;
+			e.text = text;
+			e.layer = layer.name;
+			e.color = text.rgba;
+			layer.entities.push_back(std::move(e));
+		}
+		for (const auto& image : src.images) {
+			Entity e;
+			e.kind = Entity::Kind::Image;
+			e.image = image;
+			e.layer = layer.name;
+			layer.entities.push_back(std::move(e));
+		}
+		if (!layer.entities.empty()) {
+			doc.layers.push_back(std::move(layer));
+		}
+	}
+	recomputeBounds(doc);
+	return doc;
 }
 
 bool save(const Document& doc, const std::string& path) {
@@ -1550,15 +2362,27 @@ bool save(const Document& doc, const std::string& path) {
 		}
 	}
 	dw->table("LAYER", layerCount);
-	dxf.writeLayer(*dw, DL_LayerData("0", 0),
-				   DL_Attributes("", DL_Codes::black, -1, "CONTINUOUS", 1.0));
+	bool wroteZero = false;
+	for (const auto& layer : doc.layers) {
+		if (layer.name != "0") {
+			continue;
+		}
+		dxf.writeLayer(*dw, DL_LayerData("0", layer.visible ? 0 : 1, !layer.visible),
+					   DL_Attributes("", DL_Codes::black, -1, "CONTINUOUS", 1.0));
+		wroteZero = true;
+		break;
+	}
+	if (!wroteZero) {
+		dxf.writeLayer(*dw, DL_LayerData("0", 0),
+					   DL_Attributes("", DL_Codes::black, -1, "CONTINUOUS", 1.0));
+	}
 	for (const auto& layer : doc.layers) {
 		if (layer.name == "0") {
 			continue;
 		}
 		// Layer table entries need a concrete ACI; BYLAYER only means something
 		// on an entity.
-		dxf.writeLayer(*dw, DL_LayerData(layer.name, 0),
+		dxf.writeLayer(*dw, DL_LayerData(layer.name, layer.visible ? 0 : 1, !layer.visible),
 					   DL_Attributes("", DL_Codes::white, -1, "CONTINUOUS", 1.0));
 	}
 	dw->tableEnd();
@@ -1587,16 +2411,24 @@ bool save(const Document& doc, const std::string& path) {
 	dw->sectionEnd();
 
 	dw->sectionEntities();
+	std::vector<PendingImageWrite> images;
 	for (const auto& layer : doc.layers) {
-		const DL_Attributes attrib(layer.name.empty() ? "0" : layer.name, DL_Codes::bylayer, -1,
-								   "BYLAYER", 1.0);
 		for (const auto& entity : layer.entities) {
-			writeEntity(dxf, *dw, entity, attrib);
+			int width = -1;
+			if (entity.strokeWidthMm > 0.f) {
+				width = std::max(1, static_cast<int>(std::lround(entity.strokeWidthMm * 100.f)));
+			}
+			const DL_Attributes attrib(layer.name.empty() ? "0" : layer.name, DL_Codes::bylayer,
+									   width, "BYLAYER", 1.0);
+			writeEntity(dxf, *dw, entity, attrib, images);
 		}
 	}
 	dw->sectionEnd();
 
 	dxf.writeObjects(*dw);
+	for (const auto& image : images) {
+		dxf.writeImageDef(*dw, static_cast<int>(image.handle), image.data);
+	}
 	dxf.writeObjectsEnd(*dw);
 	dw->dxfEOF();
 	dw->close();

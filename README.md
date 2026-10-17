@@ -2,41 +2,26 @@
 
 ![preview](examples/dxf/img/preview.png)
 
-ASCII DXF read/write as **typed POD entities** (paths, arcs, ellipses, splines), with a `ParsedPathDoc` / `CPaths` flatten lane for the plot pipeline.
+ASCII DXF read/write as **typed 2D POD entities** (paths, arcs, ellipses, splines, text, images, construction lines), with a `ParsedPathDoc` / `CPaths` flatten lane for the plot pipeline. `save` writes the same kinds `loadFile` keeps.
 
-Vendors [dxflib](third_party/dxflib/) (**GPL-2.0-or-later**). This pack is a GPL leaf.
+Vendors [dxflib](third_party/dxflib/) 3.26 (**GPL-2.0-or-later**). This pack is a GPL leaf.
 
 Depends on **rigPlotComponent** (+ **rigComponent** for `CArc` / `CEllipse` / `CSpline`). Headless gate: `tools/dxf_smoke.cpp`.
 
-## Supported on load
+**This is not the Autodesk DXF spec.** The parse ceiling is dxflib's entity list. Anything dxflib does not emit is dropped with no count. Types we hear but do not keep are counted in `Document::errors` (and logged by `PlotDoc::importDxf`).
 
-| Feature | Status |
-|---------|--------|
-| LINE | yes to Path |
-| LWPOLYLINE / POLYLINE (+ bulge) | yes to Path + Arc |
-| CIRCLE / ARC | yes to Ellipse / Arc |
-| ELLIPSE (full + partial) | yes to Ellipse / Arc + rotation |
-| SPLINE | yes to Spline |
-| POINT | yes |
-| INSERT / BLOCK | yes (expanded flat) |
-| HATCH | boundaries only |
-| SOLID / TRACE / 3DFACE | yes to Path |
-| LAYER + ACI / color24 | yes |
-
-## Skipped (counted in `doc.errors`)
-
-TEXT, MTEXT, DIMENSION, XLINE, RAY, ATTRIB, IMAGE, LEADER, hatch **fill**, paper space.
+Coverage detail: [docs/dxf-coverage.md](docs/dxf-coverage.md).
 
 ## Curve promotion
 
-Same policy as ofxDxf: **load is non-destructive** - no heuristic fitting runs automatically.
+**Load is non-destructive** - no heuristic fitting runs automatically.
 
 | Path | When | Default |
 |------|------|---------|
 | **Bulge to Arc** | During load | Always - LWPOLYLINE/POLYLINE bulge segments become typed `Arc` entities (straight runs stay `Path`) |
 | **Faceted circle / arc** | `promoteCurves(doc, settings)` only | **Off** (`promoteFacetedCircles` / `promoteFacetedArcs` = false) |
 
-`promoteBulgeArcCircles` / `promoteBulgeArcs` remain on the settings struct for API parity; after load they have nothing left to do because bulges are already arcs.
+`promoteBulgeArcCircles` / `promoteBulgeArcs` stay on the settings struct; after load they have nothing left to do because bulges are already arcs.
 
 ```cpp
 rigkit::dxf::CurvePromotionSettings settings;
@@ -60,7 +45,7 @@ rigkit::dxf::complementArcs(doc);
 rigkit::plot::ParsedPathDoc parsed;
 rigkit::dxf::flattenToParsed(doc, parsed); // plot lane
 
-rigkit::dxf::save(doc, "out.dxf"); // flat R2000 ASCII
+rigkit::dxf::save(doc, "out.dxf"); // same kinds loadFile produced
 ```
 
 `loadFile(path, ParsedPathDoc&)` still works - load + flatten in one call.

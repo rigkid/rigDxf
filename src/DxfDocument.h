@@ -1,14 +1,16 @@
 #pragma once
 
-#include <cstdint>
 #include <glm/glm.hpp>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include "CArc.h"
 #include "CEllipse.h"
+#include "CImages.h"
 #include "CPath.h"
 #include "CSpline.h"
+#include "CTexts.h"
 #include "ParsedPathDoc.h"
 
 namespace rigkit {
@@ -16,11 +18,17 @@ namespace dxf {
 
 /** @brief One DXF entity as typed POD (no dual path+metadata store). */
 struct Entity {
-	enum class Kind : uint8_t { Path, Arc, Ellipse, Spline, Point };
+	enum class Kind : uint8_t { Path, Arc, Ellipse, Spline, Point, Text, Image, XLine, Ray };
 
 	Kind kind = Kind::Path;
 	std::string layer = "0";
 	glm::vec4 color{0.f, 0.f, 0.f, 1.f};
+	/// True when the entity came from a DIMENSION *D block (or dim fallback text).
+	bool fromDimension = false;
+	/// Solid hatch / SOLID / TRACE / 3DFACE - flatten as a filled path.
+	bool filled = false;
+	/// Stroke in mm (0 = default hairline). Polyline geometric width, else lineweight.
+	float strokeWidthMm = 0.f;
 
 	ecs::CPath path;
 	ecs::CArc arc;
@@ -28,11 +36,16 @@ struct Entity {
 	/// Degrees - major-axis angle for Ellipse / elliptical Arc (transform-equivalent).
 	float rotationDegrees = 0.f;
 	ecs::CSpline spline;
+	ecs::TextItem text;
+	ecs::ImageItem image;
+	glm::vec2 xlineOrigin{0.f, 0.f};
+	glm::vec2 xlineDir{1.f, 0.f};
 };
 
 struct Layer {
 	std::string name;
 	glm::vec4 color{0.f, 0.f, 0.f, 1.f};
+	bool visible = true;
 	std::vector<Entity> entities;
 };
 
@@ -70,4 +83,3 @@ struct CurvePromotionResult {
 
 } // namespace dxf
 } // namespace rigkit
-
