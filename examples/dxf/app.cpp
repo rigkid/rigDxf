@@ -8,7 +8,7 @@
 #include "packs/rigComponent/src/rigComponent.h"
 #include "packs/rigDxf/src/DxfLoader.h"
 #include "packs/rigDxf/src/rigDxf.h"
-#include "packs/rigImGui/src/IWindow.h"
+#include "packs/rigImGui/src/ImGuiPanel.h"
 #include "packs/rigImGui/src/MWindow.h"
 #include "packs/rigImGui/src/rigImGui.h"
 #include "packs/rigPlotComponent/src/PathFlatten.h"
@@ -99,10 +99,10 @@ std::vector<glm::vec2> entityPolyline(const rigkit::dxf::Entity& e) {
 	return {};
 }
 
-class DxfControlWindow : public rigkit::IWindow {
+class DxfControlWindow : public rigkit::ImGuiPanel {
   public:
 	explicit DxfControlWindow(DxfHeroApp* app)
-		: IWindow("DXF", ImGuiWindowFlags_NoCollapse), m_app(app) {}
+		: ImGuiPanel("DXF", ImGuiWindowFlags_NoCollapse), m_app(app) {}
 
   protected:
 	void renderContents() override {
@@ -183,10 +183,10 @@ class DxfControlWindow : public rigkit::IWindow {
 	DxfHeroApp* m_app = nullptr;
 };
 
-class DxfViewportWindow : public rigkit::IWindow {
+class DxfViewportWindow : public rigkit::ImGuiPanel {
   public:
 	explicit DxfViewportWindow(DxfHeroApp* app)
-		: IWindow("Preview", ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+		: ImGuiPanel("Preview", ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
 								 ImGuiWindowFlags_NoScrollWithMouse),
 		  m_app(app) {}
 
