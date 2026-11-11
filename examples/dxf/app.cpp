@@ -9,6 +9,7 @@
 #include "packs/rigDxf/src/DxfLoader.h"
 #include "packs/rigDxf/src/rigDxf.h"
 #include "packs/rigImGui/src/ImGuiPanel.h"
+#include "packs/rigImGui/src/Mui.h"
 #include "packs/rigImGui/src/MWindow.h"
 #include "packs/rigImGui/src/rigImGui.h"
 #include "packs/rigPlotComponent/src/PathFlatten.h"
@@ -435,7 +436,8 @@ void DxfHeroApp::setup() {
 			},
 			"Ctrl+O");
 		ui->setRecentFileOpenHandler([this](const std::string& path) { openDxf(path); });
-		if (auto* wm = ui->getWindowManager()) {
+		auto* mui = dynamic_cast<rigkit::Mui*>(ui);
+		if (auto* wm = mui ? mui->getWindowManager() : nullptr) {
 			wm->createWindow<DxfControlWindow>(this);
 			wm->createWindow<DxfViewportWindow>(this);
 			wm->showWindow("DXF");
